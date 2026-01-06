@@ -1,0 +1,165 @@
+trigger:
+- main
+
+variables:
+  acrName: manvithacr.azurecr.io
+  aksCluster: manvith-aks
+  aksRG: aks-rg-manvith
+  namespace: image-app
+
+# ==================================================
+# STAGE 1 — SONARCLOUD
+# ==================================================
+stages:
+- stage: SonarCloud
+  displayName: "Code Quality - SonarCloud"
+  jobs:
+  - job: SonarScan
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+
+    - task: SonarCloudPrepare@4
+      inputs:
+        SonarCloud: 'SonarQubeCloudConnection'
+        organization: 'manvithkatkuri-1'
+        scannerMode: 'CLI'
+        configMode: 'manual'
+        cliProjectKey: 'image-app'
+        cliProjectName: 'image-app'
+        cliSources: 'test'
+
+    - task: SonarCloudAnalyze@4
+
+    - task: SonarCloudPublish@4
+      inputs:
+        pollingTimeoutSec: '300'
+
+
+# ==================================================
+# STAGE 2 — BUILD & PUSH TO ACR
+# ==================================================
+- stage: BuildAndPush
+  displayName: "Build & Push Images"
+  dependsOn: SonarCloud
+  jobs:
+  - job: DockerBuild
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+
+    - task: Docker@2
+      displayName: Build & Push Frontend
+      inputs:
+        command: buildAndPush
+        repository: frontend
+        dockerfile: test/frontend/Dockerfile
+        buildContext: test/frontend
+        containerRegistry: 'ACRServiceConnection'
+        tags: latest
+        arguments: --no-cache
+
+    - task: Docker@2
+      displayName: Build & Push Backend-A
+      inputs:
+        command: buildAndPush
+        repository: backend-a
+        dockerfile: test/backend-a/Dockerfile
+        containerRegistry: 'ACRServiceConnection'
+        tags: latest
+
+    - task: Docker@2
+      displayName: Build & Push Backend-B
+      inputs:
+        command: buildAndPush
+        repository: backend-b
+        dockerfile: test/backend-b/Dockerfile
+        containerRegistry: 'ACRServiceConnection'
+        tags: latest
+
+
+# ==================================================
+# STAGE 3 — AKS DEPLOY (CORRECTED)
+# ==================================================
+- stage: AKSDeploy
+  displayName: "Deploy to AKS"
+  dependsOn: BuildAndPush
+  jobs:
+  - job: Deploy
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+
+    # ---- Get AKS Credentials
+    - task: AzureCLI@2
+      displayName: Get AKS Credentials
+      inputs:
+        azureSubscription: 'AzureTraining (606e824b-aaf7-4b4e-9057-b459f6a4436d)'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az aks get-credentials \
+            --resource-group $(aksRG) \
+            --name $(aksCluster) \
+            --overwrite-existing
+
+    # ---- Apply ONLY Declarative App Manifests
+    - script: |
+        kubectl apply -f k8s/app/
+      displayName: Apply Application Manifests
+
+    # ---- Patch Metrics Server (SAFE + IDEMPOTENT)
+    - script: |
+        kubectl patch deployment metrics-server -n kube-system \
+          --type='json' \
+          -p='[
+            {
+              "op": "add",
+              "path": "/spec/template/spec/containers/0/args/-",
+              "value": "--kubelet-insecure-tls"
+            }
+          ]' || true
+      displayName: Patch Metrics Server (AKS)
+
+    # ---- Validate Metrics
+    - script: |
+        kubectl top nodes
+        kubectl top pods -A
+      displayName: Validate Confirm Metrics Server
+
+
+# ==================================================
+# STAGE 4 — MONITORING (PROMETHEUS + GRAFANA)
+# ==================================================
+- stage: Monitoring
+  displayName: "Monitoring Setup"
+  dependsOn: AKSDeploy
+  jobs:
+  - job: Monitoring
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+
+    - task: AzureCLI@2
+      displayName: Install Monitoring Stack
+      inputs:
+        azureSubscription: 'AzureTraining (606e824b-aaf7-4b4e-9057-b459f6a4436d)'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az aks get-credentials \
+            --resource-group $(aksRG) \
+            --name $(aksCluster) \
+            --overwrite-existing
+
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+            --namespace monitoring \
+            --create-namespace
+
+          kubectl get pods -n monitoring

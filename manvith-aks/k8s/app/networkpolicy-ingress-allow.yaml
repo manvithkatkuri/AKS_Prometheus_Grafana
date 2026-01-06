@@ -1,0 +1,107 @@
+# ✅ Allow Frontend to access Backend-A
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-backend-a
+  namespace: image-app
+spec:
+  podSelector:
+    matchLabels:
+      app: backend-a
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: 8080
+  policyTypes:
+    - Ingress
+
+---
+# ✅ Allow Frontend to access Backend-B
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-backend-b
+  namespace: image-app
+spec:
+  podSelector:
+    matchLabels:
+      app: backend-b
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: 8080
+  policyTypes:
+    - Ingress
+
+---
+# ✅ Allow Backend-A to access PostgreSQL
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-a-to-postgres
+  namespace: image-app
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend-a
+      ports:
+        - protocol: TCP
+          port: 5432
+  policyTypes:
+    - Ingress
+
+---
+# ✅ Allow Backend-B to access PostgreSQL
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-b-to-postgres
+  namespace: image-app
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend-b
+      ports:
+        - protocol: TCP
+          port: 5432
+  policyTypes:
+    - Ingress
+
+---
+# ✅ Allow External Traffic to Frontend (NodePort)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-external-to-frontend
+  namespace: image-app
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 80
+  policyTypes:
+    - Ingress
